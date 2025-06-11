@@ -98,8 +98,14 @@ async def search_videos(search_query: SearchQuery):
 async def root():
     return {"message": "YouTube Content Discovery Tool API"}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002) 
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=8002) 
 
    
+if __name__ == "__main__":
+    import uvicorn
+    import os
+
+    port = int(os.environ.get("PORT", 8000))  # default to 8000 locally
+    uvicorn.run(app, host="0.0.0.0", port=port)
