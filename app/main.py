@@ -39,6 +39,23 @@ class VideoResult(BaseModel):
     subscriber_count: int
     view_count: int
     country: Optional[str] = None
+    
+    # Additional video details
+    description: Optional[str] = None
+    published_at: Optional[str] = None
+    tags: Optional[List[str]] = None
+    category_id: Optional[str] = None
+    duration: Optional[str] = None
+    definition: Optional[str] = None
+    caption_available: Optional[str] = None
+    licensed_content: Optional[bool] = None
+    projection: Optional[str] = None
+    topic_categories: Optional[List[str]] = None
+    like_count: Optional[int] = None
+    comment_count: Optional[int] = None
+    
+    # Additional channel details
+    channel_info: Optional[dict] = None
 
 class SearchResponse(BaseModel):
     results: List[VideoResult]
