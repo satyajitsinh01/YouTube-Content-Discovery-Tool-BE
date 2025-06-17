@@ -38,6 +38,7 @@ class YouTubeSearch:
         Returns:
             List[Dict[str, Any]]: A list of dictionaries, each containing
                                    comprehensive information about a video and its channel.
+                                   Only includes one video per unique channel.
         """
         try:
             print(f"Searching for videos with query: '{query}' (Max results: {max_results})...")
@@ -57,11 +58,21 @@ class YouTubeSearch:
             search_response = await loop.run_in_executor(None, search_response.execute)
 
             videos_info = []
+            seen_channel_ids = set()  # Track channel IDs we've already processed
+            
             for item in search_response.get('items', []):
                 try:
                     video_id = item['id']['videoId']
                     channel_id = item['snippet']['channelId']
 
+                    # Skip this video if we've already seen this channel ID
+                    if channel_id in seen_channel_ids:
+                        print(f"Skipping video ID: {video_id} from duplicate channel ID: {channel_id}")
+                        continue
+                    
+                    # Add this channel ID to our set of seen channels
+                    seen_channel_ids.add(channel_id)
+                    
                     print(f"Processing video ID: {video_id}, Channel ID: {channel_id}")
 
                     # --- Get Comprehensive Video Details ---
