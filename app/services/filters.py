@@ -1,12 +1,39 @@
 from typing import List, Dict, Any
+from app.services.llm_handler import LLMHandler
+import json
 
 class VideoFilter:
     def __init__(self, min_views: int = 100000, min_subscribers: int = 100000, allowed_countries: List[str] = None):
         self.min_views = min_views
         self.min_subscribers = min_subscribers
-        self.allowed_countries = allowed_countries or ['US', 'GB', 'IN']  # USA, UK, India
+        self.allowed_countries = allowed_countries or ['US', 'GB', 'IN', "CA", "AU", "DE", "FR", "IT", "ES", "NL", "SE", "NO", "DK", "FI", "PL", "CZ", "RO", "HU", "BG", "HR", "SK", "SI", "EE", "LV", "LT", "IS", "NO", "SE", "DK", "FI", "PL", "CZ", "RO", "HU", "BG", "HR", "SK", "SI", "EE", "LV", "LT", "IS"]  # USA, UK, India
+        self.llm_handler = LLMHandler()
 
-    def filter_videos(self, videos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def extract_email_and_links(self, description: str) -> Dict[str, Any]:
+        """
+        Extract email and useful links from channel description using LLM.
+        """
+        try:
+            response = await self.llm_handler.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that extracts contact information."},
+                    {"role": "user", "content": f"Extract any email addresses and useful contact links from the following channel description. Return ONLY a JSON object with 'email' and 'contact_links' fields. If none found, return empty strings or arrays.\n\nDescription:\n{description}"}
+                ],
+                temperature=0.3,
+                max_tokens=150,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse the JSON string into a Python dictionary
+            result = response.choices[0].message.content
+            contact_info = json.loads(result)
+            return contact_info
+        except Exception as e:
+            print(f"Error extracting email and links: {str(e)}")
+            return {"email": "", "contact_links": []}
+
+    async def filter_videos(self, videos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Filter videos based on view count, subscriber count, and country criteria.
         Transform data to match VideoResult model format while preserving all additional data.
@@ -27,6 +54,11 @@ class VideoFilter:
             country = video.get('channel_country')
             if country and country not in self.allowed_countries:
                 continue
+            
+            # Extract email and contact links from channel description
+            contact_info = {"email": "", "contact_links": []}
+            if video.get('channel_description'):
+                contact_info = await self.extract_email_and_links(video.get('channel_description', ''))
                 
             # Transform data to match VideoResult model while keeping all additional data
             transformed_video = {
@@ -34,6 +66,8 @@ class VideoFilter:
                 'title': video['video_title'],
                 'link': video['video_link'],
                 'channel_name': video['channel_name'],
+                'email': contact_info.get('email', ''),
+                'contact_links': contact_info.get('contact_links', []),
                 'subscriber_count': video['channel_subscriber_count'],
                 'view_count': video['video_view_count'],
                 'country': video.get('channel_country'),

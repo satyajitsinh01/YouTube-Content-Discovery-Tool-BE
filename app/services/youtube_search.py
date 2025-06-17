@@ -22,7 +22,7 @@ class YouTubeSearch:
         self.youtube = build('youtube', 'v3', developerKey=api_key)
         print("YouTube API client initialized successfully.")
 
-    async def search_videos(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+    async def search_videos(self, query: str, max_results: int = 10000) -> List[Dict[str, Any]]:
         """
         Search for videos using the YouTube Data API and fetch comprehensive details
         about the video and its associated channel.

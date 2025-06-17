@@ -39,6 +39,8 @@ class VideoResult(BaseModel):
     subscriber_count: int
     view_count: int
     country: Optional[str] = None
+    email: Optional[str] = None
+    contact_links: Optional[List[str]] = None
     
     # Additional video details
     description: Optional[str] = None
@@ -96,7 +98,7 @@ async def search_videos(search_query: SearchQuery):
         all_videos = []
         for keyword in related_keywords:
             videos = await youtube_service.search_videos(keyword)
-            filtered_videos = filter_service.filter_videos(videos)
+            filtered_videos = await filter_service.filter_videos(videos)
             all_videos.extend(filtered_videos)
 
         # Apply limit if specified
