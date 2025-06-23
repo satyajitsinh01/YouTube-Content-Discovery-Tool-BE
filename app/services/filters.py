@@ -28,6 +28,20 @@ class VideoFilter:
             # Parse the JSON string into a Python dictionary
             result = response.choices[0].message.content
             contact_info = json.loads(result)
+            
+            # Ensure email is always a string
+            if isinstance(contact_info.get('email'), list) and len(contact_info.get('email', [])) > 0:
+                contact_info['email'] = contact_info['email'][0]
+            elif contact_info.get('email') is None or not isinstance(contact_info.get('email'), str):
+                contact_info['email'] = ""
+                
+            # Ensure contact_links is always a list
+            if not isinstance(contact_info.get('contact_links'), list):
+                if contact_info.get('contact_links') and isinstance(contact_info.get('contact_links'), str):
+                    contact_info['contact_links'] = [contact_info['contact_links']]
+                else:
+                    contact_info['contact_links'] = []
+                    
             return contact_info
         except Exception as e:
             print(f"Error extracting email and links: {str(e)}")
@@ -59,6 +73,21 @@ class VideoFilter:
             contact_info = {"email": "", "contact_links": []}
             if video.get('channel_description'):
                 contact_info = await self.extract_email_and_links(video.get('channel_description', ''))
+            
+            # Ensure email is a string
+            email = contact_info.get('email', '')
+            if isinstance(email, list) and len(email) > 0:
+                email = email[0]
+            elif not isinstance(email, str):
+                email = ""
+                
+            # Ensure contact_links is a list
+            contact_links = contact_info.get('contact_links', [])
+            if not isinstance(contact_links, list):
+                if contact_links and isinstance(contact_links, str):
+                    contact_links = [contact_links]
+                else:
+                    contact_links = []
                 
             # Transform data to match VideoResult model while keeping all additional data
             transformed_video = {
@@ -66,8 +95,8 @@ class VideoFilter:
                 'title': video['video_title'],
                 'link': video['video_link'],
                 'channel_name': video['channel_name'],
-                'email': contact_info.get('email', ''),
-                'contact_links': contact_info.get('contact_links', []),
+                'email': email,
+                'contact_links': contact_links,
                 'subscriber_count': video['channel_subscriber_count'],
                 'view_count': video['video_view_count'],
                 'country': video.get('channel_country'),
