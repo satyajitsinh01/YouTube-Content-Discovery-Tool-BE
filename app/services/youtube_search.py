@@ -108,7 +108,7 @@ class YouTubeSearch:
                     video_detail_info = {
                         'video_title': video_snippet.get('title', 'N/A'),
                         'video_description': video_snippet.get('description', 'N/A'),
-                        'video_link': f'https://www.youtube.com/watch?v={video_id}',
+                        # 'video_link': f'https://www.youtube.com/watch?v={video_id}',
                         'video_published_at': video_snippet.get('publishedAt', 'N/A'),
                         'video_tags': video_snippet.get('tags', []),
                         'video_category_id': video_snippet.get('categoryId', 'N/A'),

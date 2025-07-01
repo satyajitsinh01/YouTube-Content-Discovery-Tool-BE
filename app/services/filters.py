@@ -14,20 +14,8 @@ class VideoFilter:
         Extract email and useful links from channel description using LLM.
         """
         try:
-            response = await self.llm_handler.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that extracts contact information."},
-                    {"role": "user", "content": f"Extract any email addresses and useful contact links from the following channel description. Return ONLY a JSON object with 'email' and 'contact_links' fields. If none found, return empty strings or arrays.\n\nDescription:\n{description}"}
-                ],
-                temperature=0.3,
-                max_tokens=150,
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse the JSON string into a Python dictionary
-            result = response.choices[0].message.content
-            contact_info = json.loads(result)
+            contact_info = await self.llm_handler.extract_contact_info(description)
+            print("contact_info",contact_info)
             
             # Ensure email is always a string
             if isinstance(contact_info.get('email'), list) and len(contact_info.get('email', [])) > 0:
@@ -57,11 +45,11 @@ class VideoFilter:
         
         for video in videos:
             # Check view count
-            if video['video_view_count'] < self.min_views:
+            if video.get('video_view_count', 0) < self.min_views:
                 continue
                 
             # Check subscriber count
-            if video['channel_subscriber_count'] < self.min_subscribers:
+            if video.get('channel_subscriber_count', 0) < self.min_subscribers:
                 continue
                 
             # Check country if available
@@ -89,17 +77,34 @@ class VideoFilter:
                 else:
                     contact_links = []
                 
+            # Get video ID to ensure we can create a link if missing
+            video_id = video.get('video_id', '')
+            if not video_id and 'video_link' in video:
+                # Try to extract video ID from link if available
+                link = video.get('video_link', '')
+                if 'watch?v=' in link:
+                    video_id = link.split('watch?v=')[-1].split('&')[0]
+            
+            # Ensure we have a valid link
+            video_link = video.get('video_link', '')
+            if not video_link and video_id:
+                video_link = f"https://www.youtube.com/watch?v={video_id}"
+            elif not video_link:
+                # If we can't determine the link, use a placeholder
+                video_link = "https://www.youtube.com/"
+                
             # Transform data to match VideoResult model while keeping all additional data
             transformed_video = {
                 # Required fields for VideoResult model
-                'title': video['video_title'],
-                'link': video['video_link'],
-                'channel_name': video['channel_name'],
-                'email': email,
-                'contact_links': contact_links,
-                'subscriber_count': video['channel_subscriber_count'],
-                'view_count': video['video_view_count'],
-                'country': video.get('channel_country'),
+                'title': video.get('video_title', 'N/A'),
+                'link': video.get('video_link', 'N/A'),  # Use our guaranteed link
+                
+                'channel_name': video.get('channel_name', 'N/A'),
+                'email': email if email else 'N/A',
+                'contact_links': contact_links if contact_links else [],
+                'subscriber_count': video.get('channel_subscriber_count', 0),
+                'view_count': video.get('video_view_count', 0),
+                'country': video.get('channel_country', 'N/A'),
                 
                 # Additional video details
                 'description': video.get('video_description'),

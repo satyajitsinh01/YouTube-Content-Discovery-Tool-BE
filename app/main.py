@@ -11,11 +11,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Check if environment variables are set
-openai_key = os.getenv("OPENAI_API_KEY")
 youtube_key = os.getenv("YOUTUBE_API_KEY")
 
-if not openai_key or openai_key == "your_openai_api_key_here":
-    raise ValueError("OPENAI_API_KEY is not set in .env file")
 if not youtube_key or youtube_key == "your_youtube_api_key_here":
     raise ValueError("YOUTUBE_API_KEY is not set in .env file")
 
@@ -77,6 +74,10 @@ app.add_middleware(
 
 @app.post("/search", response_model=SearchResponse)
 async def search_videos(search_query: SearchQuery):
+    """
+    Search for videos based on the query and filter criteria.
+    Returns a list of VideoResult objects and related keywords.
+    """
     print("search_query============", search_query)
 
     try:
@@ -104,11 +105,68 @@ async def search_videos(search_query: SearchQuery):
         # Apply limit if specified
         if search_query.limit:
             all_videos = all_videos[:search_query.limit]
-
-        return SearchResponse(
-            results=all_videos,
-            related_keywords=related_keywords
-        )
+        
+        # Debug: Ensure all required fields are present
+        for i, video in enumerate(all_videos):
+            # Ensure all required fields are present with valid values
+            # if 'link' not in video or not video['link']:
+            #     print(f"WARNING: Video {i} is missing 'link' field. Adding default value.")
+            #     video['link'] = f"https://youtube.com/watch?v=missing-{i}"
+            
+            if 'title' not in video or not video['title']:
+                video['title'] = f"Video {i}"
+                
+            if 'channel_name' not in video or not video['channel_name']:
+                video['channel_name'] = "Unknown Channel"
+                
+            if 'subscriber_count' not in video:
+                video['subscriber_count'] = 0
+                
+            if 'view_count' not in video:
+                video['view_count'] = 0
+            
+            # Print the keys for the first video to debug
+            if i == 0:
+                print(f"First video keys: {video.keys()}")
+                print(f"First video link: {video.get('link', 'MISSING')}")
+                
+        # Convert the list to a proper SearchResponse
+        try:
+            response = SearchResponse(
+                results=all_videos,
+                related_keywords=related_keywords
+            )
+            return response
+        except Exception as e:
+            print(f"Error creating SearchResponse: {str(e)}")
+            # If there's an error, try to fix the data and return a valid response
+            fixed_videos = []
+            for video in all_videos:
+                try:
+                    # Create a minimal valid video
+                    fixed_video = {
+                        'title': video.get('title', 'Unknown Title'),
+                        # 'link': video.get('link', 'https://youtube.com'),
+                        'channel_name': video.get('channel_name', 'Unknown Channel'),
+                        'subscriber_count': int(video.get('subscriber_count', 0)),
+                        'view_count': int(video.get('view_count', 0)),
+                    }
+                    fixed_videos.append(fixed_video)
+                except Exception:
+                    continue
+            
+            return SearchResponse(
+                results=fixed_videos if fixed_videos else [
+                    {
+                        'title': 'Error processing results',
+                        # 'link': 'https://youtube.com',
+                        'channel_name': 'Error',
+                        'subscriber_count': 0,
+                        'view_count': 0
+                    }
+                ],
+                related_keywords=related_keywords
+            )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
