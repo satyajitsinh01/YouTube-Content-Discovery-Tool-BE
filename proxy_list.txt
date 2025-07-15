@@ -1,0 +1,13 @@
+# Sample proxy list for testing
+# Format: ip:port or username:password@ip:port
+# Add your actual proxy servers here
+
+# Example proxies (replace with real ones)
+# 192.168.1.100:8080
+# user:pass@192.168.1.101:8080
+# 192.168.1.102:1080
+
+# For testing, using local proxies
+127.0.0.1:8080
+127.0.0.1:1080
+127.0.0.1:3128 

@@ -5,9 +5,11 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 import asyncio
 from functools import partial
-
+import json
 # Load environment variables from .env file
 load_dotenv()
+# Use the new ChannelScraper for email and link extraction
+from services.channel_scraper import ChannelScraper
 
 class YouTubeSearch:
     def __init__(self):
@@ -22,135 +24,107 @@ class YouTubeSearch:
         self.youtube = build('youtube', 'v3', developerKey=api_key)
         print("YouTube API client initialized successfully.")
 
-    async def search_videos(self, query: str, max_results: int = 10000) -> List[Dict[str, Any]]:
+    async def search_videos(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Search for videos using the YouTube Data API and fetch comprehensive details
-        about the video and its associated channel.
-
-        Note: The YouTube Data API does NOT provide direct access to a channel's
-        private business email address due to privacy policies. This method
-        retrieves publicly available information.
-
-        Args:
-            query (str): The search term for videos.
-            max_results (int): The maximum number of video results to retrieve (1-50).
-
-        Returns:
-            List[Dict[str, Any]]: A list of dictionaries, each containing
-                                   comprehensive information about a video and its channel.
-                                   Only includes one video per unique channel.
+        Search for channels using the YouTube Data API and fetch up to `limit` channels using pagination.
+        Uses a single ChannelScraper instance for all link/email extraction in this batch.
         """
         try:
-            print(f"Searching for videos with query: '{query}' (Max results: {max_results})...")
-            
-            # Run the synchronous YouTube API calls in a thread pool
+            print(f"Searching for channels with query: '{query}' (Limit: {limit})...")
             loop = asyncio.get_event_loop()
-            search_response = await loop.run_in_executor(
-                None,
-                partial(
-                    self.youtube.search().list,
-                    q=query,
-                    part='id,snippet',
-                    type='video',
-                    maxResults=max_results
+            channels_info = []
+            seen_channel_ids = set()
+            next_page_token = None
+            fetched = 0
+            # Initialize ChannelScraper once for this batch
+            # scraper = ChannelScraper()
+            while fetched < limit:
+                max_results = min(50, limit - fetched)  # YouTube API max is 50 per call
+                search_params = {
+                    'q': query,
+                    'part': 'id,snippet',
+                    'type': 'channel',
+                    'maxResults': max_results
+                }
+                if next_page_token:
+                    search_params['pageToken'] = next_page_token
+
+                search_response = await loop.run_in_executor(
+                    None,
+                    partial(self.youtube.search().list, **search_params)
                 )
-            )
-            search_response = await loop.run_in_executor(None, search_response.execute)
-
-            videos_info = []
-            seen_channel_ids = set()  # Track channel IDs we've already processed
+                search_response = await loop.run_in_executor(None, search_response.execute)
             
-            for item in search_response.get('items', []):
-                try:
-                    video_id = item['id']['videoId']
-                    channel_id = item['snippet']['channelId']
 
-                    # Skip this video if we've already seen this channel ID
-                    if channel_id in seen_channel_ids:
-                        print(f"Skipping video ID: {video_id} from duplicate channel ID: {channel_id}")
+                for item in search_response.get('items', []):
+                    # Defensive: Only process if 'channelId' exists
+                    if 'id' in item and 'channelId' in item['id']:
+                        channel_id = item['id']['channelId']
+                    else:
+                     
                         continue
-                    
-                    # Add this channel ID to our set of seen channels
+                    if channel_id in seen_channel_ids:
+                        continue
                     seen_channel_ids.add(channel_id)
-                    
-                    print(f"Processing video ID: {video_id}, Channel ID: {channel_id}")
-
-                    # --- Get Comprehensive Video Details ---
-                    # Request more parts for detailed video information
-                    video_request = self.youtube.videos().list(
-                        part='snippet,contentDetails,statistics,topicDetails',
-                        id=video_id
-                    )
-                    video_response = await loop.run_in_executor(None, video_request.execute)
-
-                    video_data = video_response['items'][0] if video_response.get('items') else {}
-                    video_snippet = video_data.get('snippet', {})
-                    video_stats = video_data.get('statistics', {})
-                    video_content_details = video_data.get('contentDetails', {})
-                    video_topic_details = video_data.get('topicDetails', {})
-
-
+               
                     # --- Get Comprehensive Channel Details ---
-                    # Request more parts for detailed channel information
                     channel_request = self.youtube.channels().list(
                         part='snippet,statistics,brandingSettings',
                         id=channel_id
                     )
                     channel_response = await loop.run_in_executor(None, channel_request.execute)
-
                     channel_data = channel_response['items'][0] if channel_response.get('items') else {}
                     channel_snippet = channel_data.get('snippet', {})
                     channel_stats = channel_data.get('statistics', {})
                     channel_branding = channel_data.get('brandingSettings', {})
-
-
-                    # Construct the dictionary for comprehensive video and channel information
-                    video_detail_info = {
-                        'video_title': video_snippet.get('title', 'N/A'),
-                        'video_description': video_snippet.get('description', 'N/A'),
-                        # 'video_link': f'https://www.youtube.com/watch?v={video_id}',
-                        'video_published_at': video_snippet.get('publishedAt', 'N/A'),
-                        'video_tags': video_snippet.get('tags', []),
-                        'video_category_id': video_snippet.get('categoryId', 'N/A'),
-                        'video_default_language': video_snippet.get('defaultLanguage', 'N/A'),
-                        'video_duration': video_content_details.get('duration', 'N/A'), # ISO 8601 format
-                        'video_definition': video_content_details.get('definition', 'N/A'), # e.g., 'hd', 'sd'
-                        'video_caption': video_content_details.get('caption', 'N/A'), # 'true' or 'false'
-                        'video_licensed_content': video_content_details.get('licensedContent', False),
-                        'video_projection': video_content_details.get('projection', 'rectangular'),
-                        'video_topic_categories': video_topic_details.get('topicCategories', []),
-
-                        'video_view_count': int(video_stats.get('viewCount', 0)),
-                        'video_like_count': int(video_stats.get('likeCount', 0)),
-                        'video_dislike_count': int(video_stats.get('dislikeCount', 0)) if 'dislikeCount' in video_stats else 'Hidden', # Dislike count might be hidden
-                        'video_comment_count': int(video_stats.get('commentCount', 0)),
-
+                    # Construct the dictionary for comprehensive channel information
+                    channel_detail_info = {
+                        'channel_id': channel_id,
                         'channel_name': channel_snippet.get('title', 'N/A'),
-                        'channel_description': channel_snippet.get('description', 'N/A'),
+                        'channel_description': channel_snippet.get('description', ''),
                         'channel_custom_url': channel_snippet.get('customUrl', 'N/A'),
                         'channel_published_at': channel_snippet.get('publishedAt', 'N/A'),
                         'channel_country': channel_snippet.get('country', 'N/A'),
                         'channel_default_language': channel_branding.get('channel', {}).get('defaultLanguage', 'N/A'),
                         'channel_keywords': channel_branding.get('channel', {}).get('keywords', 'N/A'),
-
                         'channel_subscriber_count': int(channel_stats.get('subscriberCount', 0)),
                         'channel_video_count': int(channel_stats.get('videoCount', 0)),
                         'channel_view_count': int(channel_stats.get('viewCount', 0)),
                         'channel_hidden_subscriber_count': channel_stats.get('hiddenSubscriberCount', False),
-
-                        # IMPORTANT: The YouTube Data API does NOT provide email addresses directly.
-                        # Creators often list business emails in their channel's "About" section
-                        # or on linked external websites/social media. This information cannot
-                        # be programmatically retrieved via the official API.
-                        'business_email_info': "Not available via YouTube Data API. Check channel's 'About' page or linked websites."
                     }
+                    # Use ChannelScraper to extract email and links from About page
+                    # Prefer @username format over channel ID for better scraping
+                    if channel_detail_info['channel_custom_url'] and channel_detail_info['channel_custom_url'] != 'N/A':
+                        # Use the @username format (e.g., @MrBeast)
+                        channel_url = f"https://www.youtube.com/{channel_detail_info['channel_custom_url']}"
+                     
+                    else:
+                        # Fallback to channel ID format if no custom URL available
+                        channel_url = f"https://www.youtube.com/channel/{channel_id}"
+                      
+                    channel_detail_info['channel_url'] = channel_url
+                   
+                    # Run the scraper in an executor to avoid blocking the async event loop
+                    # scrape_result = await loop.run_in_executor(None, scraper.extract_from_channel, channel_url)
+                    # print(json.dumps(scrape_result, indent=2))
                     
-                    videos_info.append(video_detail_info)
-                except Exception as e:
-                    print(f"Error processing item (Video ID: {item['id'].get('videoId', 'N/A')}, Channel ID: {item['snippet'].get('channelId', 'N/A')}): {e}. Skipping this item.")
-                    continue # Continue to the next item if there's an error with one
+                    # channel_detail_info['email'] = scrape_result['email']
+                    # channel_detail_info['links'] = scrape_result['links']
+                    # print(json.dumps({'channel_id': channel_id, 'email': scrape_result['email'], 'links': scrape_result['links']}, indent=2))
+                    channels_info.append(channel_detail_info)
+                    fetched += 1
+                    if fetched >= limit:
+                        break
 
-            return videos_info
+                next_page_token = search_response.get('nextPageToken')
+                if not next_page_token:
+                    break  # No more pages
+            
+            # Clean up the scraper
+            # if 'scraper' in locals():
+            #     scraper.close()
+            
+            return channels_info
 
         except HttpError as e:
             print(f"YouTube API error: {str(e)}")
@@ -158,4 +132,76 @@ class YouTubeSearch:
         except Exception as e:
             print(f"An unexpected error occurred: {str(e)}")
             raise Exception(f"Unexpected error: {str(e)}")
+
+    async def get_last_videos_for_channel(self, channel_id: str, n: int = 3) -> list:
+        """
+        Fetch the last n videos for a channel using the uploads playlist.
+        Returns a list of dicts with title, description, and view count for each video.
+        """
+        loop = asyncio.get_event_loop()
+        # Get the uploads playlist ID
+        channel_response = await loop.run_in_executor(
+            None,
+            partial(
+                self.youtube.channels().list,
+                part='contentDetails',
+                id=channel_id
+            )
+        )
+        channel_response = await loop.run_in_executor(None, channel_response.execute)
+        items = channel_response.get('items', [])
+        if not items:
+            return []
+        uploads_playlist_id = items[0]['contentDetails']['relatedPlaylists']['uploads']
+        # Get the last n videos from the uploads playlist
+        playlist_items_request = self.youtube.playlistItems().list(
+            part='snippet',
+            playlistId=uploads_playlist_id,
+            maxResults=n
+        )
+        playlist_items_response = await loop.run_in_executor(None, playlist_items_request.execute)
+        video_ids = [item['snippet']['resourceId']['videoId'] for item in playlist_items_response.get('items', [])]
+        if not video_ids:
+            return []
+        # Fetch video details for these video IDs
+        videos_request = self.youtube.videos().list(
+            part='snippet,statistics',
+            id=','.join(video_ids)
+        )
+        videos_response = await loop.run_in_executor(None, videos_request.execute)
+        results = []
+        for item in videos_response.get('items', []):
+            snippet = item.get('snippet', {})
+            stats = item.get('statistics', {})
+            results.append({
+                'title': snippet.get('title', ''),
+                'description': snippet.get('description', ''),
+                'view_count': int(stats.get('viewCount', 0))
+            })
+        return results
+
+    async def extract_emails_and_links_from_urls(self, video_url_items: List[dict]) -> List[dict]:
+        """
+        Given a list of dicts with 'id' and 'url', extract emails and links from each using ChannelScraper.
+        Returns a list of dicts: { 'id': ..., 'url': ..., 'email': ..., 'links': ... }
+        """
+        loop = asyncio.get_event_loop()
+        scraper = ChannelScraper()
+        results = []
+        try:
+            for item in video_url_items:
+                url = item['url']
+                vid = item['id']
+                # Run the scraper in an executor to avoid blocking the async event loop
+                scrape_result = await loop.run_in_executor(None, scraper.extract_from_channel, url)
+             
+                results.append({
+                    'id': vid,
+                    'url': url,
+                    'email': scrape_result.get('email'),
+                    'links': scrape_result.get('links'),
+                })
+        finally:
+            scraper.close()
+        return results
 

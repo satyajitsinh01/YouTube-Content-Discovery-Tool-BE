@@ -1,17 +1,21 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from app.services.filters import VideoFilter
-from app.services.youtube_search import YouTubeSearch
-from app.services.llm_handler import LLMHandler
-from typing import List, Optional
+from pydantic import BaseModel, HttpUrl
+from services.filters import VideoFilter
+from services.youtube_search import YouTubeSearch
+from services.llm_handler import LLMHandler
+from typing import List, Optional, Dict
 import os
 from dotenv import load_dotenv
+import re
+from services.channel_scraper import ChannelScraper
 
 load_dotenv()
 
 # Check if environment variables are set
 youtube_key = os.getenv("YOUTUBE_API_KEY")
+CAPTCHA_API_KEY = os.getenv("CAPTCHA_API_KEY")
+PROXY = os.getenv("PROXY")
 
 if not youtube_key or youtube_key == "your_youtube_api_key_here":
     raise ValueError("YOUTUBE_API_KEY is not set in .env file")
@@ -52,14 +56,44 @@ class VideoResult(BaseModel):
     topic_categories: Optional[List[str]] = None
     like_count: Optional[int] = None
     comment_count: Optional[int] = None
-    
+    isicp: Optional[bool] = None
     # Additional channel details
     channel_info: Optional[dict] = None
 
 class SearchResponse(BaseModel):
     results: List[VideoResult]
     related_keywords: List[str]
+
+class VideoUrlItem(BaseModel):
+    id: str
+    url: str
+
+class ExtractEmailRequest(BaseModel):
+    video_urls: List[VideoUrlItem]
+
+class EmailResult(BaseModel):
+    video_url: VideoUrlItem
+    email: Optional[str] = None
+    error: Optional[str] = None
+    links: List[str]
     
+class ChannelDiscoveryResult(BaseModel):
+    id: str
+    channel_name: str
+    subscriber_count: int
+    country: str
+    about: str
+    links: List[str]
+    emails: List[str]
+    last_3_videos: List[dict]
+    average_views: float
+    channel_url: str
+    is_icp: Optional[bool] = None
+
+class ChannelDiscoveryResponse(BaseModel):
+    results: List[ChannelDiscoveryResult]
+    related_keywords: List[str]
+
 app = FastAPI()
 
 # Enable CORS
@@ -71,105 +105,133 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-
-@app.post("/search", response_model=SearchResponse)
+@app.post("/search", response_model=ChannelDiscoveryResponse)
 async def search_videos(search_query: SearchQuery):
     """
-    Search for videos based on the query and filter criteria.
-    Returns a list of VideoResult objects and related keywords.
+    Search for channels based on the query and filter criteria.
+    Returns a list of ChannelDiscoveryResult objects and related keywords.
     """
     print("search_query============", search_query)
 
     try:
-        # Initialize services
         llm_service = LLMHandler()
         youtube_service = YouTubeSearch()
-        
-        # Initialize filter service with dynamic parameters
+        print(f"DEBUG: Received country_code: '{search_query.country_code}'")
+        allowed_countries = search_query.country_code.replace(" ", "").split(",") if search_query.country_code and search_query.country_code.strip() else None
+        print(f"DEBUG: Processed allowed_countries: {allowed_countries}")
         filter_service = VideoFilter(
-            min_views=search_query.min_views or 100000,  # Use default if not provided
-            min_subscribers=search_query.min_subscribers or 100000,  # Use default if not provided
-            allowed_countries=search_query.country_code.replace(" ", "").split(",") if search_query.country_code else None
+            min_views=search_query.min_views or 100000,
+            min_subscribers=search_query.min_subscribers or 100000,
+            allowed_countries=allowed_countries
         )
-
-        # Get related keywords using LLM
         related_keywords = await llm_service.generate_synonyms(search_query.query)
-
-        # Search videos for each keyword
-        all_videos = []
+        all_channels = []
+        seen_channel_ids = set()
+        total_channels_visited = 0
         for keyword in related_keywords:
-            videos = await youtube_service.search_videos(keyword)
-            filtered_videos = await filter_service.filter_videos(videos)
-            all_videos.extend(filtered_videos)
-
-        # Apply limit if specified
-        if search_query.limit:
-            all_videos = all_videos[:search_query.limit]
-        
-        # Debug: Ensure all required fields are present
-        for i, video in enumerate(all_videos):
-            # Ensure all required fields are present with valid values
-            # if 'link' not in video or not video['link']:
-            #     print(f"WARNING: Video {i} is missing 'link' field. Adding default value.")
-            #     video['link'] = f"https://youtube.com/watch?v=missing-{i}"
-            
-            if 'title' not in video or not video['title']:
-                video['title'] = f"Video {i}"
-                
-            if 'channel_name' not in video or not video['channel_name']:
-                video['channel_name'] = "Unknown Channel"
-                
-            if 'subscriber_count' not in video:
-                video['subscriber_count'] = 0
-                
-            if 'view_count' not in video:
-                video['view_count'] = 0
-            
-            # Print the keys for the first video to debug
-            if i == 0:
-                print(f"First video keys: {video.keys()}")
-                print(f"First video link: {video.get('link', 'MISSING')}")
-                
-        # Convert the list to a proper SearchResponse
-        try:
-            response = SearchResponse(
-                results=all_videos,
-                related_keywords=related_keywords
-            )
-            return response
-        except Exception as e:
-            print(f"Error creating SearchResponse: {str(e)}")
-            # If there's an error, try to fix the data and return a valid response
-            fixed_videos = []
-            for video in all_videos:
-                try:
-                    # Create a minimal valid video
-                    fixed_video = {
-                        'title': video.get('title', 'Unknown Title'),
-                        # 'link': video.get('link', 'https://youtube.com'),
-                        'channel_name': video.get('channel_name', 'Unknown Channel'),
-                        'subscriber_count': int(video.get('subscriber_count', 0)),
-                        'view_count': int(video.get('view_count', 0)),
-                    }
-                    fixed_videos.append(fixed_video)
-                except Exception:
+            channels = await youtube_service.search_videos(keyword, limit=search_query.limit or 5)
+            for channel in channels:
+                total_channels_visited += 1
+                channel_id = channel.get('channel_id')
+                if not channel_id or channel_id in seen_channel_ids:
                     continue
-            
-            return SearchResponse(
-                results=fixed_videos if fixed_videos else [
-                    {
-                        'title': 'Error processing results',
-                        # 'link': 'https://youtube.com',
-                        'channel_name': 'Error',
-                        'subscriber_count': 0,
-                        'view_count': 0
-                    }
-                ],
-                related_keywords=related_keywords
-            )
-
+                seen_channel_ids.add(channel_id)
+                if allowed_countries and channel.get('channel_country') not in allowed_countries:
+                    continue
+                if channel.get('channel_subscriber_count', 0) < (search_query.min_subscribers or 100000):
+                    continue
+                about = channel.get('channel_description', '')
+                # Extract all links from about
+                url_pattern = r'https?://[^\s<>"\)\(]+'
+                links = channel.get('links', [])
+                # Extract all emails from about
+                email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                emails = re.findall(email_pattern, about)
+                # Get last 3 videos
+                last_videos = await youtube_service.get_last_videos_for_channel(channel_id, n=3)
+                last_3_videos = [{
+                    'title': v['title'],
+                    'description': v['description'],
+                    'view_count': v['view_count']
+                } for v in last_videos]
+                average_views = float(sum(v['view_count'] for v in last_videos)) / len(last_videos) if last_videos else 0.0
+                
+                # Use LLM to analyze channel and extract contact info
+                channel_details = {
+                    'channel_name': channel.get('channel_name', ''),
+                    'sub_count': channel.get('channel_subscriber_count', 0),
+                    'about': about,
+                    'links': links,
+                    'last_3_titles': [v['title'] for v in last_3_videos],
+                    'avg_views': average_views,
+                    'last_3_descriptions': [v['description'] for v in last_3_videos],
+                    'country': channel.get('channel_country', '')
+                }
+                
+                llm_analysis = await llm_service.extract_contact_info(about, channel_details)
+                
+                # Use LLM extracted emails and contact links if available
+                llm_emails = llm_analysis.get('email', '')
+                if llm_emails:
+                    emails = [llm_emails] if llm_emails not in emails else emails
+                
+                llm_contact_links = llm_analysis.get('contact_links', [])
+                if llm_contact_links:
+                    links.extend(llm_contact_links)
+                
+                all_channels.append(ChannelDiscoveryResult(
+                    id=channel_id,
+                    channel_name=channel.get('channel_name', ''),
+                    subscriber_count=channel.get('channel_subscriber_count', 0),
+                    country=channel.get('channel_country', ''),
+                    about=about,
+                    links=links,
+                    emails=emails,
+                    channel_url=channel.get('channel_url', ''),
+                    last_3_videos=last_3_videos,
+                    average_views=average_views,
+                    is_icp=llm_analysis.get('isicp', False)
+                ))
+                if search_query.limit and len(all_channels) >= search_query.limit:
+                    break
+            if search_query.limit and len(all_channels) >= search_query.limit:
+                break
+        print(f"Total channels visited: {total_channels_visited}")
+        return ChannelDiscoveryResponse(results=all_channels, related_keywords=related_keywords)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/extract-emails", response_model=List[EmailResult])
+async def extract_emails(req: ExtractEmailRequest):
+    youtube_service = YouTubeSearch()
+    try:
+        # Convert HttpUrl to str for the service method
+        # url_list = [str(url) for url in req.video_urls]
+        # Now req.video_urls is a list of VideoUrlItem
+        results = await youtube_service.extract_emails_and_links_from_urls([
+            {"id": v.id, "url": v.url} for v in req.video_urls
+        ])
+        email_results = []
+        for result in results:
+            email_results.append(
+                EmailResult(
+                    video_url=VideoUrlItem(id=result.get('id'), url=result.get('url')),
+                    email=result.get('email'),
+                    links=result.get('links') or [],
+                    error=None if result.get('email') else 'No email found'
+                )
+            )
+        return email_results
+    except Exception as e:
+        # If the whole batch fails, return a single error result for each input
+        return [
+            EmailResult(
+                video_url=VideoUrlItem(id=v.id, url=v.url),
+                email=None,
+                links=[],
+                error=str(e)
+            ) for v in req.video_urls
+        ]
 
 @app.get("/")
 async def root():
@@ -185,6 +247,6 @@ if __name__ == "__main__":
     import os
 
     # port = int(os.environ.get("PORT", 8000))  # default to 8000 locally
-    port = int(os.getenv("PORT", 3000))
+    port = int(os.getenv("PORT", 8000))
 
     uvicorn.run(app, host="0.0.0.0", port=port)
