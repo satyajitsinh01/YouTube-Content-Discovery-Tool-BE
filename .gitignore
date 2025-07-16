@@ -16,6 +16,7 @@ parts/
 sdist/
 var/
 wheels/
+temp_auto_push.bat
 *.egg-info/
 .installed.cfg
 *.egg
@@ -29,10 +30,11 @@ ENV/
 
 # IDE
 .idea/
-.vscode/
 *.swp
 *.swo
 
 # OS
 .DS_Store
 Thumbs.db
+.gitignore
+temp_interactive_push.bat

@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from services.llm_handler import LLMHandler
+from app.services.llm_handler import LLMHandler
 import json
 from pydantic import BaseModel
 

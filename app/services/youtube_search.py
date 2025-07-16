@@ -9,7 +9,7 @@ import json
 # Load environment variables from .env file
 load_dotenv()
 # Use the new ChannelScraper for email and link extraction
-from services.channel_scraper import ChannelScraper
+from app.services.channel_scraper import ChannelScraper
 
 class YouTubeSearch:
     def __init__(self):
