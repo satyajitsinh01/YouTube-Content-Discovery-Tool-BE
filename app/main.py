@@ -1,14 +1,16 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-from services.filters import VideoFilter
-from services.youtube_search import YouTubeSearch
-from services.llm_handler import LLMHandler
+from app.services.filters import VideoFilter
+from app.services.youtube_search import YouTubeSearch
+from app.services.llm_handler import LLMHandler
 from typing import List, Optional, Dict
 import os
 from dotenv import load_dotenv
 import re
-from services.channel_scraper import ChannelScraper
+from app.services.channel_scraper import ChannelScraper
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
 
 load_dotenv()
 
@@ -105,6 +107,14 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    print(f"Unhandled error: {exc}")  # Log for debugging
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Oops! Something went wrong. Please try again later."}
+    )
+
 @app.post("/search", response_model=ChannelDiscoveryResponse)
 async def search_videos(search_query: SearchQuery):
     """
@@ -199,7 +209,12 @@ async def search_videos(search_query: SearchQuery):
         print(f"Total channels visited: {total_channels_visited}")
         return ChannelDiscoveryResponse(results=all_channels, related_keywords=related_keywords)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the real error for debugging
+        print(f"Internal error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="something went wrong on our end. Please try again later or contact support if the issue persists."
+        )
 
 @app.post("/extract-emails", response_model=List[EmailResult])
 async def extract_emails(req: ExtractEmailRequest):
@@ -236,10 +251,6 @@ async def extract_emails(req: ExtractEmailRequest):
 @app.get("/")
 async def root():
     return {"message": "YouTube Content Discovery Tool API"}
-
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=8002) 
 
    
 if __name__ == "__main__":
